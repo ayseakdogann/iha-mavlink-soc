@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""
-SOC Backend — köprü + tespit + web panel + yapay zeka raporu, tek serviste.
-
-Bu servis:
-  - Telemetriyi drondan alır (14560), komutları yer istasyonundan alır (14561),
-    ikisini de ilgili tarafa iletir (köprü görevi).
-  - Her paketi inceler, saldırı tespit ederse olay üretir.
-  - Olayları ve canlı telemetriyi tarayıcıdaki panele WebSocket ile yayınlar.
-  - Her olay için Türkçe bir "yapay zeka" raporu üretir (LLM anahtarı varsa onu,
-    yoksa şablon tabanlı yedeği kullanır) — demo internetsiz de çalışır.
-
-Çalıştırma:
-  python backend/app.py
-  Tarayıcı:  http://localhost:8000
-Drone:   python sim/drone_sim.py --out 127.0.0.1:14560 --in 127.0.0.1:14571
-Saldırı: python attacks/inject_land.py --target 127.0.0.1:14561 --cmd LAND
-"""
+"""SOC Backend - kopru + tespit + web panel + yapay zeka raporu + savunma."""
 import argparse
 import asyncio
 import math
@@ -33,7 +17,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from pymavlink import mavutil
 from pymavlink.dialects.v20 import common as mavlink2
 
-# ----------------------------- Tespit (SOC çekirdeği) -----------------------
 LEGIT_GCS_SYSID = 254
 CRITICAL = {
     mavlink2.MAV_CMD_NAV_LAND: "LAND",
@@ -129,7 +112,6 @@ class Detector:
         return out
 
 
-# ----------------------------- Yapay zeka raporu ----------------------------
 MUDAHALE = {
     "KOMUT ENJEKSIYONU": "Mesaj imzalamayi (MAVLink 2) etkinlestir; yetkisiz sysid'i "
                          "engelle; komut kaynagini dogrula.",
@@ -139,16 +121,17 @@ MUDAHALE = {
                  "kanal kapasitesini izle.",
     "KESIF": "Yetkisiz bilgi isteklerini reddet; kaynagi logla ve alarma bagla.",
     "KRITIK KOMUT": "Kritik komutlari ikinci bir dogrulamaya tabi tut.",
+    "KOMUT REDDEDILDI": "Saldiri MAVLink imzalama ile engellendi; drone etkilenmedi. "
+                        "Kaynagi logla ve engel listesine ekle.",
 }
 
 
 def ai_rapor(olay):
-    """Olay icin Turkce rapor. ANTHROPIC_API_KEY varsa LLM, yoksa sablon."""
-    key = os.environ.get("ANTHROPIC_API_KEY")
+    key = os.environ.get("LLM_API_KEY")
     if key:
         try:
             return _llm_rapor(olay, key)
-        except Exception as e:  # LLM hatasinda sablona dus
+        except Exception:
             pass
     m = MUDAHALE.get(olay["tur"], "Olayi incele ve kaynagi dogrula.")
     return (f"Ne oldu: {olay['tur']} ({olay['siddet']}). {olay['aciklama']}. "
@@ -158,33 +141,34 @@ def ai_rapor(olay):
 
 
 def _llm_rapor(olay, key):
-    """Anthropic API ile kisa Turkce rapor (opsiyonel)."""
     import json
     import urllib.request
-    prompt = (
-        "Bir İHA SOC analistisin. Aşağıdaki MAVLink güvenlik olayını Türkçe, "
-        "kısa ve madde madde raporla (Ne oldu / Risk / Önerilen müdahale / "
-        "MITRE ATT&CK). Olay: " + json.dumps(olay, ensure_ascii=False)
-    )
-    body = json.dumps({
-        "model": "claude-haiku-5-5",
-        "max_tokens": 300,
-        "messages": [{"role": "user", "content": prompt}],
-    }).encode()
-    req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages", data=body,
-        headers={"x-api-key": key, "anthropic-version": "2023-06-01",
-                 "content-type": "application/json"})
+    url = os.environ.get("LLM_API_URL", "https://api.openai.com/v1/chat/completions")
+    model = os.environ.get("LLM_MODEL", "gpt-4o-mini")
+    prompt = ("Bir IHA SOC analistisin. Asagidaki MAVLink guvenlik olayini Turkce, "
+              "kisa ve madde madde raporla (Ne oldu / Risk / Onerilen mudahale / "
+              "MITRE ATT&CK). Olay: " + json.dumps(olay, ensure_ascii=False))
+    body = json.dumps({"model": model, "max_tokens": 300,
+                       "messages": [{"role": "user", "content": prompt}]}).encode()
+    req = urllib.request.Request(url, data=body,
+        headers={"Authorization": f"Bearer {key}", "content-type": "application/json"})
     with urllib.request.urlopen(req, timeout=20) as r:
         data = json.loads(r.read())
-    return data["content"][0]["text"]
+    return data["choices"][0]["message"]["content"]
 
 
-# ----------------------------- Paylaşılan durum -----------------------------
 EVENT_LOG = deque(maxlen=200)
 LATEST_TEL = {"lat": None, "lon": None, "alt": None, "mode": None, "armed": None}
-RAW_Q = Queue()          # köprü thread'inden -> async yayına
-STATS = {"paket": 0, "alarm": 0}
+RAW_Q = Queue()
+STATS = {"paket": 0, "alarm": 0, "reddedilen": 0}
+STATE = {"defense": False}
+
+
+def komut_imzali(msg):
+    try:
+        return bool(msg.get_header().incompat_flags & 0x01)
+    except Exception:
+        return False
 
 
 def bridge_thread(args):
@@ -221,6 +205,17 @@ def bridge_thread(args):
         if m is not None:
             got = True
             STATS["paket"] += 1
+            if (STATE["defense"] and m.get_type() == "COMMAND_LONG"
+                    and not komut_imzali(m)):
+                STATS["reddedilen"] += 1
+                e = det._event("KOMUT REDDEDILDI", "ENGELLENDI",
+                               "imzasiz komut dusuruldu (drone korundu)",
+                               f"sysid={m.get_srcSystem()}",
+                               "Savunma: MAVLink 2 mesaj imzalama")
+                e["ai"] = ai_rapor(e)
+                EVENT_LOG.appendleft(e)
+                push({"tip": "olay", "veri": e})
+                continue
             to_drone.send(m.get_msgbuf())
             for e in det.on_command(m):
                 STATS["alarm"] += 1
@@ -231,8 +226,7 @@ def bridge_thread(args):
             time.sleep(0.002)
 
 
-# ----------------------------- Web / API ------------------------------------
-app = FastAPI(title="İHA SOC")
+app = FastAPI(title="IHA SOC")
 PANEL = Path(__file__).resolve().parent.parent / "panel" / "index.html"
 subscribers = set()
 
@@ -244,7 +238,14 @@ def index():
 
 @app.get("/events")
 def events():
-    return JSONResponse({"stats": STATS, "olaylar": list(EVENT_LOG)[:50]})
+    return JSONResponse({"stats": STATS, "defense": STATE["defense"],
+                         "olaylar": list(EVENT_LOG)[:50]})
+
+
+@app.post("/defense")
+def set_defense(on: bool):
+    STATE["defense"] = bool(on)
+    return {"defense": STATE["defense"]}
 
 
 @app.websocket("/ws")
@@ -252,7 +253,6 @@ async def ws(ws: WebSocket):
     await ws.accept()
     q = asyncio.Queue()
     subscribers.add(q)
-    # anlık durum
     await ws.send_json({"tip": "durum", "veri": dict(LATEST_TEL)})
     for e in list(EVENT_LOG)[:20][::-1]:
         await ws.send_json({"tip": "olay", "veri": e})
@@ -267,7 +267,6 @@ async def ws(ws: WebSocket):
 
 
 async def fanout():
-    """RAW_Q'dan al, tüm abonelere dağıt."""
     while True:
         try:
             while True:
@@ -294,7 +293,6 @@ def main():
     ap.add_argument("--flood", type=int, default=200)
     ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
-
     t = threading.Thread(target=bridge_thread, args=(args,), daemon=True)
     t.start()
     print(f"[backend] panel: http://localhost:{args.port}")

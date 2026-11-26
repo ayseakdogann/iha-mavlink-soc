@@ -34,6 +34,12 @@
   .KRITIK{background:rgba(255,77,79,.15);color:var(--kritik)}
   .YUKSEK{background:rgba(255,159,67,.15);color:var(--yuksek)}
   .ORTA{background:rgba(255,212,59,.15);color:var(--orta)}
+  .ENGELLENDI{background:rgba(46,204,113,.18);color:var(--ok)}
+  .defbtn{margin-left:auto;display:flex;align-items:center;gap:10px}
+  .defbtn button{background:var(--line);color:var(--txt);border:1px solid var(--line);
+    padding:7px 14px;border-radius:8px;cursor:pointer;font-weight:600}
+  .defbtn button.on{background:rgba(46,204,113,.2);border-color:var(--ok);color:var(--ok)}
+  .defbtn .lbl{font-size:12px;color:var(--muted)}
   .mitre{color:var(--muted);font-size:11px}
   #ai{white-space:pre-wrap;line-height:1.5;font-size:13px;min-height:60px;color:#dbe6ff}
   #ai .ph{color:var(--muted)}
@@ -51,6 +57,10 @@
   <span class="dot" id="live"></span>
   <h1>İHA SOC — Canlı İzleme ve Tespit</h1>
   <span class="mitre" id="conn">bağlanıyor…</span>
+  <div class="defbtn">
+    <span class="lbl">Savunma (imzalama):</span>
+    <button id="def" onclick="toggleDef()">KAPALI</button>
+  </div>
 </header>
 
 <div class="wrap">
@@ -119,10 +129,23 @@ function connect(){
     else if(m.tip==="olay") olayEkle(m.veri);
   };
 }
+let defOn=false;
+function setDefUI(on){
+  defOn=on; const b=$("def");
+  b.textContent = on ? "AÇIK" : "KAPALI";
+  b.classList.toggle("on", on);
+}
+async function toggleDef(){
+  const yeni=!defOn;
+  try{ const r=await fetch("/defense?on="+yeni,{method:"POST"});
+    const d=await r.json(); setDefUI(d.defense); }catch(e){}
+}
 async function pollStats(){
   try{ const r=await fetch("/events"); const d=await r.json();
     $("pkt").firstChild.textContent=d.stats.paket;
-    $("alr").firstChild.textContent=d.stats.alarm; }catch(e){}
+    $("alr").firstChild.textContent=d.stats.alarm;
+    if(typeof d.defense==="boolean" && d.defense!==defOn) setDefUI(d.defense);
+  }catch(e){}
   setTimeout(pollStats,1000);
 }
 connect(); pollStats();
