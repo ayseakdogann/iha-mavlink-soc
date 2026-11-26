@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>İHA SOC Paneli</title>
+<style>
+  :root{
+    --bg:#0b1020; --panel:#131a2e; --line:#243049; --txt:#e6ecf5; --muted:#8c9ac0;
+    --kritik:#ff4d4f; --yuksek:#ff9f43; --orta:#ffd43b; --ok:#2ecc71; --acc:#4da3ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font-family:Segoe UI,system-ui,Arial,sans-serif}
+  header{padding:14px 20px;border-bottom:1px solid var(--line);
+         display:flex;align-items:center;gap:14px}
+  header h1{font-size:18px;margin:0}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--ok);
+       box-shadow:0 0 10px var(--ok)}
+  .wrap{display:grid;grid-template-columns:320px 1fr;gap:16px;padding:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .card h2{font-size:13px;margin:0 0 10px;color:var(--muted);
+           text-transform:uppercase;letter-spacing:.5px}
+  .tile{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line)}
+  .tile:last-child{border-bottom:0}
+  .tile b{font-variant-numeric:tabular-nums}
+  .stat{display:flex;gap:18px;margin-top:6px}
+  .stat div{font-size:22px;font-weight:700}
+  .stat span{display:block;font-size:11px;color:var(--muted);font-weight:400}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase}
+  .sev{font-weight:700;padding:2px 8px;border-radius:20px;font-size:11px;white-space:nowrap}
+  .KRITIK{background:rgba(255,77,79,.15);color:var(--kritik)}
+  .YUKSEK{background:rgba(255,159,67,.15);color:var(--yuksek)}
+  .ORTA{background:rgba(255,212,59,.15);color:var(--orta)}
+  .mitre{color:var(--muted);font-size:11px}
+  #ai{white-space:pre-wrap;line-height:1.5;font-size:13px;min-height:60px;color:#dbe6ff}
+  #ai .ph{color:var(--muted)}
+  .flash{animation:fl 1s ease}
+  @keyframes fl{from{background:rgba(77,163,255,.18)}to{background:transparent}}
+  .map{position:relative;height:150px;background:#0e1526;border:1px solid var(--line);
+       border-radius:8px;overflow:hidden;margin-top:8px}
+  .drone{position:absolute;width:12px;height:12px;border-radius:50%;background:var(--acc);
+         box-shadow:0 0 12px var(--acc);transform:translate(-50%,-50%);transition:.2s}
+  .drone.spoof{background:var(--kritik);box-shadow:0 0 12px var(--kritik)}
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="live"></span>
+  <h1>İHA SOC — Canlı İzleme ve Tespit</h1>
+  <span class="mitre" id="conn">bağlanıyor…</span>
+</header>
+
+<div class="wrap">
+  <div>
+    <div class="card">
+      <h2>Drone Telemetri</h2>
+      <div class="tile"><span>Enlem</span><b id="lat">—</b></div>
+      <div class="tile"><span>Boylam</span><b id="lon">—</b></div>
+      <div class="tile"><span>İrtifa</span><b id="alt">—</b></div>
+      <div class="map"><div class="drone" id="drone" style="left:50%;top:70%"></div></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Özet</h2>
+      <div class="stat">
+        <div id="pkt">0<span>paket</span></div>
+        <div id="alr">0<span>alarm</span></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>🤖 Yapay Zeka Raporu (son olay)</h2>
+      <div id="ai"><span class="ph">Henüz olay yok. Bir saldırı başlatın…</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Olay Akışı</h2>
+    <table>
+      <thead><tr><th>Zaman</th><th>Tür</th><th>Şiddet</th><th>Açıklama</th><th>Kaynak</th><th>ATT&CK</th></tr></thead>
+      <tbody id="tbody">
+        <tr><td colspan="6" style="color:var(--muted)">Olay bekleniyor…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let bos = true;
+function setTel(t){
+  if(t.lat!=null) $("lat").textContent = t.lat;
+  if(t.lon!=null) $("lon").textContent = t.lon;
+  if(t.alt!=null) $("alt").textContent = t.alt + " m";
+}
+function olayEkle(e){
+  if(bos){ $("tbody").innerHTML=""; bos=false; }
+  const tr = document.createElement("tr");
+  tr.className="flash";
+  tr.innerHTML = `<td>${e.zaman}</td><td>${e.tur}</td>
+    <td><span class="sev ${e.siddet}">${e.siddet}</span></td>
+    <td>${e.aciklama}</td><td>${e.kaynak}</td>
+    <td class="mitre">${e.mitre}</td>`;
+  $("tbody").prepend(tr);
+  while($("tbody").children.length>60) $("tbody").lastChild.remove();
+  if(e.ai){ $("ai").textContent = `[${e.zaman}] ${e.tur}\n\n${e.ai}`; }
+  if(e.tur==="GPS SPOOF"){ $("drone").classList.add("spoof");
+    setTimeout(()=>$("drone").classList.remove("spoof"),1500); }
+}
+function connect(){
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = ()=>{ $("conn").textContent="bağlı"; $("live").style.background="var(--ok)"; };
+  ws.onclose = ()=>{ $("conn").textContent="bağlantı koptu, yeniden…";
+    $("live").style.background="var(--kritik)"; setTimeout(connect,1500); };
+  ws.onmessage = ev=>{
+    const m = JSON.parse(ev.data);
+    if(m.tip==="telemetri"||m.tip==="durum") setTel(m.veri);
+    else if(m.tip==="olay") olayEkle(m.veri);
+  };
+}
+async function pollStats(){
+  try{ const r=await fetch("/events"); const d=await r.json();
+    $("pkt").firstChild.textContent=d.stats.paket;
+    $("alr").firstChild.textContent=d.stats.alarm; }catch(e){}
+  setTimeout(pollStats,1000);
+}
+connect(); pollStats();
+</script>
+</body>
+</html>
