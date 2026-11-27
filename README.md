@@ -177,8 +177,8 @@ Bu proje birlikte geliştirilmiştir:
 
 | | |
 |---|---|
-| **Ayşe Akdoğan** | [@ayseakdogann](https://github.com/ayseakdogann) |
-| **Melih Ali Çağman** | [@MelihAliCagman](https://github.com/MelihAliCagman) |
+| **Ayşe Akdoğan**  | [@ayseakdogann](https://github.com/ayseakdogann) |
+| **Melih Ali Çağman**  | [@MelihAliCagman](https://github.com/MelihAliCagman) |
 
 ## 📄 Lisans
 
